@@ -1,0 +1,25 @@
+# Never commit secrets, passwords or keys
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+secrets*
+*secret*
+credentials*
+*password*
+config.local.*
+
+# Client data / photos must never go to GitHub
+*.jpg
+*.jpeg
+*.heic
+*.docx
+*.pdf
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+node_modules/

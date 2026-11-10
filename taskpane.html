@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html dir="rtl" lang="he">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=Edge">
+<title>כלי שמאות</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; margin: 0; padding: 14px; color: #1d1d1f; font-size: 14px; background:#fafafa; }
+  h1 { font-size: 17px; margin: 0 0 12px; }
+  .card { background:#fff; border:1px solid #e1e3e8; border-radius:10px; padding:12px; margin-bottom:12px; }
+  .card h2 { font-size:15px; margin:0 0 10px; }
+  label.row { display:flex; justify-content:space-between; align-items:center; margin:8px 0; gap:8px; }
+  select, input[type=range] { font-size:14px; }
+  button { width:100%; padding:10px; font-size:15px; font-weight:600; border-radius:8px; cursor:pointer; }
+  .primary { background:#1a73e8; color:#fff; border:0; }
+  .secondary { background:#fff; color:#1a73e8; border:1.5px solid #1a73e8; margin-bottom:8px; }
+  button:disabled { opacity:.45; cursor:default; }
+  input[type=file] { display:none; }
+  #picked { font-size:13px; color:#555; margin:6px 0 10px; min-height:18px; }
+  #status { font-size:13px; margin-top:10px; min-height:18px; }
+  .ok { color:#137333; } .err { color:#c5221f; } .busy { color:#8a5a00; }
+  .hint { font-size:12px; color:#777; margin-top:6px; }
+</style>
+</head>
+<body>
+  <h1>📋 כלי שמאות</h1>
+
+  <div class="card">
+    <h2>📷 הדבקת תמונות נכס</h2>
+    <button class="secondary" id="pickFolder">בחר תיקיית נכס</button>
+    <button class="secondary" id="pickFiles" style="font-size:13px;padding:6px">או בחר תמונות בודדות</button>
+    <input type="file" id="folderInput" webkitdirectory directory multiple>
+    <input type="file" id="filesInput" accept="image/*" multiple>
+    <div id="picked">לא נבחרה תיקייה</div>
+
+    <label class="row">תמונות בעמוד
+      <select id="perPage">
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3" selected>3</option>
+        <option value="4">4 (שתי עמודות)</option>
+        <option value="6">6 (שתי עמודות)</option>
+      </select>
+    </label>
+    <label class="row">רוחב תמונה <span><input type="range" id="widthPct" min="50" max="100" step="5" value="80"> <b id="widthVal">80%</b></span></label>
+    <label class="row"><span>להתחיל בעמוד חדש</span><input type="checkbox" id="newPage" checked></label>
+
+    <button class="primary" id="insertBtn" disabled>הדבק תמונות</button>
+    <div id="status"></div>
+    <div class="hint">התמונות נכנסות לפי סדר הצילום, ממורכזות, מהמקום שבו עומד הסמן. כלום לא נמחק מהמסמך.</div>
+  </div>
+
+<script>
+  // גודל עמוד A4 ושוליים רגילים (2.54 ס"מ) — בנקודות
+  const PAGE = { usableW: 595 - 2 * 72, usableH: 842 - 2 * 72 };
+  const GAP = 16; // רווח בין תמונות
+
+  const $ = id => document.getElementById(id);
+  let files = [];
+
+  function setStatus(t, cls) { $('status').textContent = t; $('status').className = cls || ''; }
+
+  Office.onReady(info => {
+    if (info.host !== Office.HostType.Word) { setStatus('החלונית עובדת רק בוורד', 'err'); return; }
+    if (!Office.context.requirements.isSetSupported('WordApi', '1.3')) {
+      setStatus('גרסת הוורד ישנה מדי לחלונית הזו (נדרש Word 2016 ומעלה)', 'err');
+    }
+  });
+
+  $('widthPct').oninput = e => $('widthVal').textContent = e.target.value + '%';
+  $('pickFolder').onclick = () => $('folderInput').click();
+  $('pickFiles').onclick  = () => $('filesInput').click();
+  $('folderInput').onchange = e => takeFiles(e.target.files, true);
+  $('filesInput').onchange  = e => takeFiles(e.target.files, false);
+
+  function takeFiles(list, isFolder) {
+    files = [...list].filter(f => /\.(jpe?g|png)$/i.test(f.name))
+                     .sort((a, b) => a.name.localeCompare(b.name, 'he', { numeric: true }));
+    let label = files.length + ' תמונות';
+    if (isFolder && files[0] && files[0].webkitRelativePath) {
+      const parts = files[0].webkitRelativePath.split('/');
+      label = 'נכס: ' + parts[parts.length - 2] + ' — ' + label;
+    }
+    $('picked').textContent = files.length ? label : 'לא נמצאו תמונות בתיקייה';
+    $('insertBtn').disabled = !files.length;
+    setStatus('');
+  }
+
+  function readImage(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => {
+        const img = new Image();
+        img.onload = () => resolve({ b64: r.result.split(',')[1], w: img.naturalWidth, h: img.naturalHeight });
+        img.onerror = reject;
+        img.src = r.result;
+      };
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+  }
+
+  function fit(w, h, maxW, maxH) {
+    const s = Math.min(maxW / w, maxH / h);
+    return { w: Math.round(w * s), h: Math.round(h * s) };
+  }
+
+  $('insertBtn').onclick = async () => {
+    const perPage = +$('perPage').value;
+    const pct = +$('widthPct').value / 100;
+    const newPage = $('newPage').checked;
+    $('insertBtn').disabled = true;
+    try {
+      if (perPage <= 3) await insertStacked(perPage, pct, newPage);
+      else await insertGrid(perPage, pct, newPage);
+      setStatus(`✓ הודבקו ${files.length} תמונות`, 'ok');
+    } catch (e) {
+      console.error(e);
+      setStatus('שגיאה: ' + (e.message || e), 'err');
+    } finally {
+      $('insertBtn').disabled = false;
+    }
+  };
+
+  // 1–3 תמונות בעמוד, אחת מתחת לשנייה
+  async function insertStacked(perPage, pct, newPage) {
+    const maxW = PAGE.usableW * pct;
+    const maxH = (PAGE.usableH - GAP * perPage) / perPage - 6;
+    await Word.run(async ctx => {
+      let last = ctx.document.getSelection();
+      for (let i = 0; i < files.length; i++) {
+        setStatus(`מדביק ${i + 1} מתוך ${files.length}...`, 'busy');
+        const img = await readImage(files[i]);
+        const size = fit(img.w, img.h, maxW, maxH);
+        const p = last.insertParagraph('', 'After');
+        p.alignment = 'Centered';
+        p.spaceBefore = 0; p.spaceAfter = GAP; p.firstLineIndent = 0; p.leftIndent = 0; p.rightIndent = 0;
+        const pic = p.insertInlinePictureFromBase64(img.b64, 'Start');
+        pic.lockAspectRatio = true; pic.width = size.w; pic.height = size.h;
+        if ((i === 0 && newPage) || (i > 0 && i % perPage === 0)) {
+          p.getRange('Start').insertBreak(Word.BreakType.page, 'Before');
+        }
+        last = p;
+        await ctx.sync();
+      }
+    });
+  }
+
+  // 4 או 6 תמונות בעמוד, בטבלה של שתי עמודות בלי מסגרות
+  async function insertGrid(perPage, pct, newPage) {
+    const cols = 2, rowsPerPage = perPage / cols;
+    const maxW = (PAGE.usableW * pct) / cols - 10;
+    const maxH = (PAGE.usableH - GAP * rowsPerPage) / rowsPerPage - 10;
+    await Word.run(async ctx => {
+      let anchor = ctx.document.getSelection().insertParagraph('', 'After');
+      let done = 0;
+      for (let start = 0; start < files.length; start += perPage) {
+        const group = files.slice(start, start + perPage);
+        const rows = Math.ceil(group.length / cols);
+        if (start > 0 || newPage) anchor.getRange('Start').insertBreak(Word.BreakType.page, 'Before');
+        const empty = Array.from({ length: rows }, () => Array(cols).fill(''));
+        const table = anchor.insertTable(rows, cols, 'After', empty);
+        table.horizontalAlignment = 'Centered';
+        ['Top', 'Bottom', 'Left', 'Right', 'InsideHorizontal', 'InsideVertical']
+          .forEach(loc => { const b = table.getBorder(loc); b.type = 'None'; });
+        await ctx.sync();
+        for (let k = 0; k < group.length; k++) {
+          setStatus(`מדביק ${++done} מתוך ${files.length}...`, 'busy');
+          const img = await readImage(group[k]);
+          const size = fit(img.w, img.h, maxW, maxH);
+          const cell = table.getCell(Math.floor(k / cols), k % cols);
+          cell.horizontalAlignment = 'Centered';
+          const para = cell.body.paragraphs.getFirst();
+          para.alignment = 'Centered'; para.spaceAfter = 4; para.spaceBefore = 4;
+          const pic = para.insertInlinePictureFromBase64(img.b64, 'Start');
+          pic.lockAspectRatio = true; pic.width = size.w; pic.height = size.h;
+          await ctx.sync();
+        }
+        anchor = table.insertParagraph('', 'After');
+        await ctx.sync();
+      }
+    });
+  }
+</script>
+</body>
+</html>
