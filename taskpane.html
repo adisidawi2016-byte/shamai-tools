@@ -29,7 +29,12 @@
 
   <div class="card">
     <h2>📷 הדבקת תמונות נכס</h2>
-    <button class="secondary" id="pickFolder">בחר תיקיית נכס</button>
+    <div id="driveBox" style="display:none">
+      <input type="search" id="propSearch" placeholder="🔍 חפש נכס לפי שם..." autocomplete="off"
+             style="width:100%;padding:9px;font-size:14px;border:1px solid #c7c9cf;border-radius:8px;margin-bottom:6px">
+      <div id="propList" style="max-height:220px;overflow-y:auto;border:1px solid #e1e3e8;border-radius:8px;background:#fff;margin-bottom:8px"></div>
+    </div>
+    <button class="secondary" id="pickFolder">בחר תיקייה מהמחשב</button>
     <button class="secondary" id="pickFiles" style="font-size:13px;padding:6px">או בחר תמונות בודדות</button>
     <input type="file" id="folderInput" webkitdirectory directory multiple>
     <input type="file" id="filesInput" accept="image/*" multiple>
@@ -69,6 +74,81 @@
     }
   });
 
+  // ---- נכסים מ-Google Drive (קריאה בלבד) ----
+  // כתובת הממשק והקוד מגיעים פעם אחת מקובץ ההגדרות שבמחשב, ונשמרים בחלונית.
+  const qs = new URLSearchParams(location.search);
+  let API = qs.get('api'), KEY = qs.get('k');
+  try {
+    if (API && KEY) { localStorage.setItem('shamaiApi', API); localStorage.setItem('shamaiKey', KEY); }
+    else { API = localStorage.getItem('shamaiApi'); KEY = localStorage.getItem('shamaiKey'); }
+  } catch (e) {}
+  let properties = [];
+
+  async function api(params) {
+    const url = API + '?' + new URLSearchParams({ ...params, k: KEY });
+    const r = await fetch(url);
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    return j;
+  }
+
+  function renderList() {
+    const q = $('propSearch').value.trim();
+    const list = properties.filter(p => !q || p.name.includes(q));
+    $('propList').innerHTML = '';
+    if (!list.length) { $('propList').innerHTML = '<div style="padding:10px;color:#777">לא נמצאו נכסים</div>'; return; }
+    list.forEach(p => {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:9px 10px;border-bottom:1px solid #f0f0f0;cursor:pointer;display:flex;justify-content:space-between';
+      row.innerHTML = '<span></span><span style="color:#777;font-size:12px"></span>';
+      row.children[0].textContent = p.name;
+      row.children[1].textContent = p.count + ' תמונות';
+      row.onmouseenter = () => row.style.background = '#eef4ff';
+      row.onmouseleave = () => row.style.background = row.dataset.sel ? '#dbe7ff' : '';
+      row.onclick = () => chooseProperty(p, row);
+      $('propList').appendChild(row);
+    });
+  }
+
+  async function chooseProperty(p, row) {
+    [...$('propList').children].forEach(r => { delete r.dataset.sel; r.style.background = ''; });
+    row.dataset.sel = '1'; row.style.background = '#dbe7ff';
+    setStatus('טוען רשימת תמונות...', 'busy');
+    try {
+      const { photos } = await api({ a: 'photos', id: p.id });
+      files = photos.map(ph => ({
+        name: ph.name,
+        load: async () => {
+          const j = await api({ a: 'photo', id: ph.id });
+          return withSize(j.b64, j.mime || 'image/jpeg');
+        }
+      }));
+      $('picked').textContent = 'נכס: ' + p.name + ' — ' + files.length + ' תמונות';
+      $('insertBtn').disabled = !files.length;
+      setStatus('');
+    } catch (e) { setStatus('שגיאה בטעינה: ' + e.message, 'err'); }
+  }
+
+  async function loadProperties() {
+    if (!API || !KEY) return;
+    $('driveBox').style.display = 'block';
+    $('pickFolder').style.fontSize = '13px'; $('pickFolder').style.padding = '6px';
+    $('propList').innerHTML = '<div style="padding:10px;color:#777">טוען נכסים מ-Drive...</div>';
+    try { properties = (await api({ a: 'list' })).properties; renderList(); }
+    catch (e) { $('propList').innerHTML = ''; setStatus('לא הצלחתי לטעון נכסים: ' + e.message, 'err'); }
+  }
+  $('propSearch').oninput = renderList;
+  loadProperties();
+
+  function withSize(b64, mime) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve({ b64, w: img.naturalWidth, h: img.naturalHeight });
+      img.onerror = reject;
+      img.src = 'data:' + mime + ';base64,' + b64;
+    });
+  }
+
   $('widthPct').oninput = e => $('widthVal').textContent = e.target.value + '%';
   $('pickFolder').onclick = () => $('folderInput').click();
   $('pickFiles').onclick  = () => $('filesInput').click();
@@ -76,8 +156,9 @@
   $('filesInput').onchange  = e => takeFiles(e.target.files, false);
 
   function takeFiles(list, isFolder) {
-    files = [...list].filter(f => /\.(jpe?g|png)$/i.test(f.name))
+    const local = [...list].filter(f => /\.(jpe?g|png)$/i.test(f.name))
                      .sort((a, b) => a.name.localeCompare(b.name, 'he', { numeric: true }));
+    files = local.map(f => ({ name: f.name, webkitRelativePath: f.webkitRelativePath, load: () => readImage(f) }));
     let label = files.length + ' תמונות';
     if (isFolder && files[0] && files[0].webkitRelativePath) {
       const parts = files[0].webkitRelativePath.split('/');
@@ -132,7 +213,7 @@
       let last = ctx.document.getSelection();
       for (let i = 0; i < files.length; i++) {
         setStatus(`מדביק ${i + 1} מתוך ${files.length}...`, 'busy');
-        const img = await readImage(files[i]);
+        const img = await files[i].load();
         const size = fit(img.w, img.h, maxW, maxH);
         const p = last.insertParagraph('', 'After');
         p.alignment = 'Centered';
@@ -168,7 +249,7 @@
         await ctx.sync();
         for (let k = 0; k < group.length; k++) {
           setStatus(`מדביק ${++done} מתוך ${files.length}...`, 'busy');
-          const img = await readImage(group[k]);
+          const img = await group[k].load();
           const size = fit(img.w, img.h, maxW, maxH);
           const cell = table.getCell(Math.floor(k / cols), k % cols);
           cell.horizontalAlignment = 'Centered';
